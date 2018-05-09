@@ -95,7 +95,7 @@ void EtcdStore::set(const std::string& key, const std::vector<char>& data) {
 
 std::vector<char> EtcdStore::get(const std::string& key) {
   // Block until key is set
-  std::cerr << __LINE__ << "trying to get " << key << std::endl;
+  //std::cerr << __LINE__ << "trying to get " << key << std::endl;
   wait({key});
 
   cetcd_response * res = cetcd_get(&etcd_, key.c_str());
@@ -113,15 +113,16 @@ std::vector<char> EtcdStore::get(const std::string& key) {
       int outlen;
       char * value = curl_easy_unescape(curl, res->node->value, len, &outlen);
       printf("value:%s\n", value);
-      for (char* p = value; *p != '\0'; p++) {
+      for (int i=0; i < outlen; i++) {
         // Buffer overflow'ish code><
-        ret.push_back(*p);
+        ret.push_back(value[i]);
       }
       curl_free(value);
       curl_easy_cleanup(curl);
     }
   }
   cetcd_response_release(res);
+  std::cerr << ret.size() << " bytes fetched as key " << key << std::endl;
   return ret;
   /*
   // Get value
@@ -149,11 +150,17 @@ void EtcdStore::wait(
   size_t count = keys.size();
   while (count > 0) {
     for ( auto key : keys ) {
-      std::vector<char> value = get(key);
-      if (value.size() > 0) {
-	count--;
-	continue;
+      cetcd_response * res = cetcd_get(&etcd_, key.c_str());
+      if (res->err) {
+	//printf("error :%d, %s (%s)\n", res->err->ecode, res->err->message,
+	//res->err->cause);
+      } else {
+	if (res->node) {
+	  count--;
+	  continue;
+	}
       }
+      cetcd_response_release(res);
     }
     if (count > 0) {
       const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
@@ -163,8 +170,9 @@ void EtcdStore::wait(
 					       "Wait timeout for key(s): ", ::gloo::MakeString(keys)));
       }
       // sleep override 
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
+    std::cerr << count << std::endl;
   }
   /*
     std::cerr << __LINE__ << "trying to wait for " << key << std::endl;
