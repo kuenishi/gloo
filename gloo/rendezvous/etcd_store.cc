@@ -16,20 +16,23 @@
 #include "gloo/common/logging.h"
 #include "gloo/common/string.h"
 
+#include <iostream>
+#include <cstring>
+
 namespace gloo {
 namespace rendezvous {
 
 static const std::chrono::seconds kWaitTimeout = std::chrono::seconds(60);
 
 EtcdStore::EtcdStore(const std::vector<std::string>& hosts) {
-  cetcd_array addrs;
-  cetcd_array_init(&addrs, hosts.size());
+  cetcd_array_init(&addrs_, hosts.size() * 10);
   for (auto host : hosts) {
-    char* addr = (char*)malloc(sizeof(char)*hosts.size());
-    ::memcpy(addr, host.c_str(), hosts.size());
-    cetcd_array_append(&addrs, addr);
+    char* addr = (char*)malloc(sizeof(char)*host.size());
+    ::strncpy(addr, host.c_str(), host.size());
+    std::cout << host << " -> " << addr << std::endl;
+    cetcd_array_append(&addrs_, addr);
   }
-  cetcd_client_init(&etcd_, &addrs);
+  cetcd_client_init(&etcd_, &addrs_);
   /*  
   struct timeval timeout = {.tv_sec = 2};
   etcd_ = etcdConnectWithTimeout(host.c_str(), port, timeout);
@@ -38,17 +41,20 @@ EtcdStore::EtcdStore(const std::vector<std::string>& hosts) {
     GLOO_THROW_IO_EXCEPTION("Connecting to Etcd: ", etcd_->errstr);
   }
   */
-  cetcd_array_destroy(&addrs);
 }
 
 EtcdStore::~EtcdStore() {
+  std::cerr << "destroy~~~~" << std::endl;
   cetcd_client_destroy(&etcd_);
+  cetcd_array_destroy(&addrs_);
 }
 
 void EtcdStore::set(const std::string& key, const std::vector<char>& data) {
+  std::cerr << __LINE__ << "trying to set " << key << std::endl;
   CURL * curl = curl_easy_init();
   if (!curl) {
     // throw exception here
+    std::cerr << __LINE__ << "cannot alloc curl" << key << std::endl;
     return;
   }
   char value[data.size()];
@@ -56,17 +62,21 @@ void EtcdStore::set(const std::string& key, const std::vector<char>& data) {
     value[s] = data[s];
   }
   char* tmp = curl_easy_escape(curl, value, data.size());
+  
   if (!tmp) {
+    std::cerr << __LINE__ << "cannot escape value at " << key << std::endl;
     // throw exception here
     return;
     //GLOO_THROW_IO_EXCEPTION(etcd_->errstr);
   }
-  
+
+  std::cout << "key:" << key << "\turl-encoded: " << tmp << std::endl;
   cetcd_response * res = cetcd_set(&etcd_, key.c_str(), tmp, 0);
 
   if (res->err) {
     printf("error :%d, %s (%s)\n", res->err->ecode, res->err->message,
            res->err->cause);
+    GLOO_THROW_IO_EXCEPTION("Error: ", res->err->message);
   }
   
   curl_free(tmp);
@@ -85,6 +95,7 @@ void EtcdStore::set(const std::string& key, const std::vector<char>& data) {
 
 std::vector<char> EtcdStore::get(const std::string& key) {
   // Block until key is set
+  std::cerr << __LINE__ << "trying to get " << key << std::endl;
   wait({key});
 
   cetcd_response * res = cetcd_get(&etcd_, key.c_str());
@@ -127,9 +138,9 @@ void EtcdStore::wait(
     const std::chrono::milliseconds& timeout) {
   // Polling is fine for the typical rendezvous use case, as it is
   // only done at initialization time and  not at run time.
-
   const auto start = std::chrono::steady_clock::now();
   for ( auto key : keys ) {
+    std::cerr << __LINE__ << "trying to wait for " << key << std::endl;
     cetcd_response * res = cetcd_watch(&etcd_, key.c_str(), 2345);
     cetcd_response_print(res);
     cetcd_response_release(res);

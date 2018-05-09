@@ -45,6 +45,7 @@ class EtcdStore : public Store {
 
  protected:
   cetcd_client etcd_;
+  cetcd_array addrs_;
 };
 
 } // namespace rendezvous
