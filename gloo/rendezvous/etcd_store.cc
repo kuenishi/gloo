@@ -1,0 +1,158 @@
+/**
+ * Copyright (c) 2017-present, Facebook, Inc.
+ * All rights reserved.
+ *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree. An additional grant
+ * of patent rights can be found in the PATENTS file in the same directory.
+ */
+
+#include "gloo/rendezvous/etcd_store.h"
+
+#include <cstring>
+#include <thread>
+
+#include "gloo/common/error.h"
+#include "gloo/common/logging.h"
+#include "gloo/common/string.h"
+
+namespace gloo {
+namespace rendezvous {
+
+static const std::chrono::seconds kWaitTimeout = std::chrono::seconds(60);
+
+EtcdStore::EtcdStore(const std::vector<std::string>& hosts) {
+  cetcd_array addrs;
+  cetcd_array_init(&addrs, hosts.size());
+  for (auto host : hosts) {
+    char* addr = (char*)malloc(sizeof(char)*hosts.size());
+    ::memcpy(addr, host.c_str(), hosts.size());
+    cetcd_array_append(&addrs, addr);
+  }
+  cetcd_client_init(&etcd_, &addrs);
+  /*  
+  struct timeval timeout = {.tv_sec = 2};
+  etcd_ = etcdConnectWithTimeout(host.c_str(), port, timeout);
+  GLOO_ENFORCE(etcd_ != nullptr);
+  if (etcd_->err != 0) {
+    GLOO_THROW_IO_EXCEPTION("Connecting to Etcd: ", etcd_->errstr);
+  }
+  */
+  cetcd_array_destroy(&addrs);
+}
+
+EtcdStore::~EtcdStore() {
+  cetcd_client_destroy(&etcd_);
+}
+
+void EtcdStore::set(const std::string& key, const std::vector<char>& data) {
+  CURL * curl = curl_easy_init();
+  if (!curl) {
+    // throw exception here
+    return;
+  }
+  char value[data.size()];
+  for (size_t s = 0; s < data.size(); s++) {
+    value[s] = data[s];
+  }
+  char* tmp = curl_easy_escape(curl, value, data.size());
+  if (!tmp) {
+    // throw exception here
+    return;
+    //GLOO_THROW_IO_EXCEPTION(etcd_->errstr);
+  }
+  
+  cetcd_response * res = cetcd_set(&etcd_, key.c_str(), tmp, 0);
+
+  if (res->err) {
+    printf("error :%d, %s (%s)\n", res->err->ecode, res->err->message,
+           res->err->cause);
+  }
+  
+  curl_free(tmp);
+  curl_easy_cleanup(curl);
+  cetcd_response_release(res);
+  /*
+  etcdReply* reply = static_cast<etcdReply*>(ptr);
+  if (reply->type == ETCD_REPLY_ERROR) {
+    GLOO_THROW_IO_EXCEPTION("Error: ", reply->str);
+  }
+  GLOO_ENFORCE_EQ(reply->type, ETCD_REPLY_INTEGER);
+  GLOO_ENFORCE_EQ(reply->integer, 1, "Key '", key, "' already set");
+  freeReplyObject(reply);
+  */
+}
+
+std::vector<char> EtcdStore::get(const std::string& key) {
+  // Block until key is set
+  wait({key});
+
+  cetcd_response * res = cetcd_get(&etcd_, key.c_str());
+
+  std::vector<char> ret;
+  if (res->err) {
+    printf("error :%d, %s (%s)\n", res->err->ecode, res->err->message,
+           res->err->cause);
+  } else {
+    if (res->node) {
+      printf("key:%s\n", res->node->key);
+      printf("value:%s\n", res->node->value);
+      for (char* p = res->node->value; *p != '\0'; p++) {
+        // Buffer overflow'ish code><
+        ret.push_back(*p);
+      }
+    }
+  }
+  cetcd_response_release(res);
+  return ret;
+  /*
+  // Get value
+  void* ptr = etcdCommand(etcd_, "GET %b", key.c_str(), (size_t)key.size());
+  if (ptr == nullptr) {
+    GLOO_THROW_IO_EXCEPTION(etcd_->errstr);
+  }
+  etcdReply* reply = static_cast<etcdReply*>(ptr);
+  if (reply->type == ETCD_REPLY_ERROR) {
+    GLOO_THROW_IO_EXCEPTION("Error: ", reply->str);
+  }
+  GLOO_ENFORCE_EQ(reply->type, ETCD_REPLY_STRING);
+  std::vector<char> result(reply->str, reply->str + reply->len);
+  freeReplyObject(reply);
+  return result;
+  */
+}
+
+void EtcdStore::wait(
+    const std::vector<std::string>& keys,
+    const std::chrono::milliseconds& timeout) {
+  // Polling is fine for the typical rendezvous use case, as it is
+  // only done at initialization time and  not at run time.
+
+  const auto start = std::chrono::steady_clock::now();
+  for ( auto key : keys ) {
+    cetcd_response * res = cetcd_watch(&etcd_, key.c_str(), 2345);
+    cetcd_response_print(res);
+    cetcd_response_release(res);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - start);
+    if (timeout != kNoTimeout && elapsed > timeout) {
+      GLOO_THROW_IO_EXCEPTION(GLOO_ERROR_MSG(
+          "Wait timeout for key(s): ", ::gloo::MakeString(keys)));
+    }
+  }
+  /*
+  while (!check(keys)) {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - start);
+    if (timeout != kNoTimeout && elapsed > timeout) {
+      GLOO_THROW_IO_EXCEPTION(GLOO_ERROR_MSG(
+          "Wait timeout for key(s): ", ::gloo::MakeString(keys)));
+    }
+    // sleep override 
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  */
+}
+
+} // namespace rendezvous
+} // namespace gloo
