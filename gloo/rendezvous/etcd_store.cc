@@ -109,8 +109,8 @@ std::vector<char> EtcdStore::get(const std::string& key) {
       CURL * curl = curl_easy_init();
       printf("key:%s\n", res->node->key);
 
-      size_t len = strlen(res->node->value);
-      size_t outlen;
+      int len = strlen(res->node->value);
+      int outlen;
       char * value = curl_easy_unescape(curl, res->node->value, len, &outlen);
       printf("value:%s\n", value);
       for (char* p = value; *p != '\0'; p++) {
