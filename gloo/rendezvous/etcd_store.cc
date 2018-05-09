@@ -106,12 +106,19 @@ std::vector<char> EtcdStore::get(const std::string& key) {
            res->err->cause);
   } else {
     if (res->node) {
+      CURL * curl = curl_easy_init();
       printf("key:%s\n", res->node->key);
-      printf("value:%s\n", res->node->value);
-      for (char* p = res->node->value; *p != '\0'; p++) {
+
+      size_t len = strlen(res->node->value);
+      size_t outlen;
+      char * value = curl_easy_unescape(curl, res->node->value, len, &outlen);
+      printf("value:%s\n", value);
+      for (char* p = value; *p != '\0'; p++) {
         // Buffer overflow'ish code><
         ret.push_back(*p);
       }
+      curl_free(value);
+      curl_easy_cleanup(curl);
     }
   }
   cetcd_response_release(res);
