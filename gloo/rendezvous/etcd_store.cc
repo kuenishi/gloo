@@ -146,7 +146,27 @@ void EtcdStore::wait(
   // Polling is fine for the typical rendezvous use case, as it is
   // only done at initialization time and  not at run time.
   const auto start = std::chrono::steady_clock::now();
-  for ( auto key : keys ) {
+  size_t count = keys.size();
+  while (count > 0) {
+    for ( auto key : keys ) {
+      std::vector<char> value = get(key);
+      if (value.size() > 0) {
+	count--;
+	continue;
+      }
+    }
+    if (count > 0) {
+      const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+									    std::chrono::steady_clock::now() - start);
+      if (timeout != kNoTimeout && elapsed > timeout) {
+	GLOO_THROW_IO_EXCEPTION(GLOO_ERROR_MSG(
+					       "Wait timeout for key(s): ", ::gloo::MakeString(keys)));
+      }
+      // sleep override 
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  /*
     std::cerr << __LINE__ << "trying to wait for " << key << std::endl;
     cetcd_response * res = cetcd_watch(&etcd_, key.c_str(), 2345);
     cetcd_response_print(res);
@@ -157,7 +177,7 @@ void EtcdStore::wait(
       GLOO_THROW_IO_EXCEPTION(GLOO_ERROR_MSG(
           "Wait timeout for key(s): ", ::gloo::MakeString(keys)));
     }
-  }
+    } */
   /*
   while (!check(keys)) {
     const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
